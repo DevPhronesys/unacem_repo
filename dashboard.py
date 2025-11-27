@@ -162,8 +162,9 @@ def filter_frame(df: pd.DataFrame, months: Iterable[str], clients: Iterable[str]
 def render_filters(df: pd.DataFrame) -> Tuple[List[str], List[str], List[str]]:
     st.sidebar.header("Filtros")
 
-    available_months = [m for m in MONTH_ORDER if m in set(df["mes"].dropna())]
-    month_options = available_months or sorted(df["mes"].dropna().unique())
+    # Mostrar siempre los meses de Julio a Diciembre en orden, tal como se solicitó,
+    # incluso si algún mes aún no tiene datos cargados.
+    month_options = MONTH_ORDER
     selected_months = st.sidebar.multiselect(
         "Mes", options=month_options, default=month_options
     )
