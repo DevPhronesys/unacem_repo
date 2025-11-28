@@ -39,7 +39,22 @@ DISTANCE_LABELS: Tuple[str, ...] = (
     ">10 km",
 )
 
-DEFAULT_API_URL = ""
+SPANISH_MONTHS = {
+    1: "ENERO",
+    2: "FEBRERO",
+    3: "MARZO",
+    4: "ABRIL",
+    5: "MAYO",
+    6: "JUNIO",
+    7: "JULIO",
+    8: "AGOSTO",
+    9: "SETIEMBRE",
+    10: "OCTUBRE",
+    11: "NOVIEMBRE",
+    12: "DICIEMBRE",
+}
+
+DEFAULT_API_URL = "https://retoolapi.dev/dle9do/data"
 REQUIRED_COLUMNS = {
     "organizacion",
     "local",
@@ -101,7 +116,11 @@ def attach_computed_fields(df: pd.DataFrame) -> pd.DataFrame:
     validate_columns(df)
     df = df.copy()
     created_at = ensure_datetime(df)
-    df["mes"] = created_at.dt.to_period("M").astype(str)
+    df["mes_period"] = created_at.dt.to_period("M")
+    df["mes_nombre"] = df["mes_period"].apply(
+        lambda p: f"{SPANISH_MONTHS.get(p.month, '').upper()} {p.year}".strip()
+    )
+    df["mes"] = df["mes_period"].astype(str)
 
     df["distancia_km"] = df.apply(
         lambda row: haversine_km(
@@ -126,7 +145,7 @@ def attach_computed_fields(df: pd.DataFrame) -> pd.DataFrame:
 def filter_frame(df: pd.DataFrame, months: Iterable[str], clients: Iterable[str], sedes: Iterable[str]) -> pd.DataFrame:
     mask = pd.Series(True, index=df.index)
     if months:
-        mask &= df["mes"].isin(months)
+        mask &= df["mes_nombre"].isin(months)
     if clients:
         mask &= df["organizacion"].isin(clients)
     if sedes:
@@ -136,7 +155,12 @@ def filter_frame(df: pd.DataFrame, months: Iterable[str], clients: Iterable[str]
 
 def render_filters(df: pd.DataFrame) -> Tuple[List[str], List[str], List[str]]:
     st.sidebar.header("Filtros")
-    selected_months = st.sidebar.multiselect("Mes", sorted(df["mes"].unique()))
+    month_order = (
+        df.sort_values("mes_period")[["mes_nombre", "mes_period"]]
+        .drop_duplicates(subset="mes_period")
+        .reset_index(drop=True)
+    )
+    selected_months = st.sidebar.multiselect("Mes", month_order["mes_nombre"].tolist())
     selected_clients = st.sidebar.multiselect(
         "Cliente (organización)", sorted(df["organizacion"].unique())
     )
@@ -146,22 +170,59 @@ def render_filters(df: pd.DataFrame) -> Tuple[List[str], List[str], List[str]]:
 
 def render_distance_matrix(df: pd.DataFrame) -> None:
     st.subheader("Órdenes por rango de distancia (km)")
-    matrix = (
+    if df.empty:
+        st.info("No hay órdenes para mostrar en la matriz.")
+        return
+
+    counts = (
         df.pivot_table(
-            index="local",
+            index="mes_nombre",
             columns="rango_distancia_km",
             values="order_id",
             aggfunc="count",
             fill_value=0,
         )
         .reindex(columns=DISTANCE_LABELS, fill_value=0)
-        .sort_index()
     )
-    matrix["Total órdenes"] = matrix.sum(axis=1)
-    total_row = matrix.sum().to_frame().T
-    total_row.index = ["TOTAL"]
-    matrix_with_total = pd.concat([matrix, total_row])
-    st.dataframe(matrix_with_total)
+
+    # Ordenar filas por el mes original
+    month_order = (
+        df.sort_values("mes_period")[["mes_nombre", "mes_period"]]
+        .drop_duplicates(subset="mes_period")
+        .set_index("mes_nombre")
+    )
+    counts = counts.loc[[idx for idx in month_order.index if idx in counts.index]]
+
+    row_totals = counts.sum(axis=1)
+    grand_total = row_totals.sum()
+    percentages = counts.div(row_totals.replace(0, pd.NA), axis=0) * 100
+
+    formatted = pd.DataFrame(index=counts.index)
+    for label in DISTANCE_LABELS:
+        formatted[(label, "Órdenes")] = counts[label]
+        formatted[(label, "%" )] = percentages[label].round(1).fillna(0)
+
+    formatted[("Total", "Órdenes")] = row_totals
+    formatted[("Total", "%" )] = (row_totals / grand_total * 100).round(1).fillna(0)
+
+    # Agregar fila de totales generales
+    totals_row = pd.DataFrame({
+        (label, "Órdenes"): counts[label].sum() for label in DISTANCE_LABELS
+    }, index=["TOTAL"])
+    totals_row[("Total", "Órdenes")] = grand_total
+    totals_row[("Total", "%" )] = 100.0 if grand_total else 0.0
+    for label in DISTANCE_LABELS:
+        totals_row[(label, "%")] = (
+            counts[label].sum() / grand_total * 100 if grand_total else 0.0
+        ).__round__(1)
+
+    final_matrix = pd.concat([formatted, totals_row])
+    final_matrix.columns = pd.MultiIndex.from_tuples(final_matrix.columns)
+
+    percent_columns = {(label, "%"): "{:.1f}%" for label in list(DISTANCE_LABELS) + ["Total"]}
+    st.dataframe(
+        final_matrix.style.format(percent_columns).format("{:.0f}", na_rep="0")
+    )
 
 
 def render_map(df: pd.DataFrame) -> None:
@@ -218,7 +279,7 @@ def render_map(df: pd.DataFrame) -> None:
 
 
 def render_app(df: pd.DataFrame) -> None:
-    st.title("Dashboard de distancias de entrega")
+    st.title("Órdenes por Cliente")
     st.caption(
         "Filtra por mes, cliente y sede para analizar las distancias entre las sedes y los puntos de entrega."
     )
@@ -240,9 +301,11 @@ def render_app(df: pd.DataFrame) -> None:
     render_distance_matrix(filtered)
 
     st.subheader("Detalle de órdenes")
+    date_column = "fecha_creacion" if "fecha_creacion" in filtered.columns else "fecha_creacion_copia"
     detail = filtered[
         [
-            "fecha_creacion" if "fecha_creacion" in filtered.columns else "fecha_creacion_copia",
+            date_column,
+            "mes_nombre",
             "organizacion",
             "local",
             "order_id",
@@ -250,11 +313,14 @@ def render_app(df: pd.DataFrame) -> None:
             "distancia_km",
             "rango_distancia_km",
         ]
-    ].rename(columns={
-        "organizacion": "cliente",
-        "local": "sede/pedido",
-        "distancia_km": "distancia_km",
-    })
+    ].rename(
+        columns={
+            date_column: "fecha_creacion",
+            "organizacion": "cliente",
+            "local": "sede/pedido",
+            "rango_distancia_km": "rango_km",
+        }
+    )
     detail["distancia_km"] = detail["distancia_km"].round(2)
     st.dataframe(detail)
 

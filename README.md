@@ -20,15 +20,17 @@ El API debe devolver un JSON con las órdenes que incluya:
 - `order_id`, `no_orden` (identificadores usados en el detalle)
 
 ## Ejecución
-Proporciona el endpoint del API y ejecuta:
+Por defecto la app apunta al API público `https://retoolapi.dev/dle9do/data`. Puedes cambiar el endpoint en la barra lateral.
+
+Ejecútalo con:
 
 ```bash
 streamlit run dashboard.py --server.port 8501
 ```
 
-Luego ingresa la URL del API en la barra lateral para cargar y explorar las órdenes. El dashboard mostrará:
+Luego ingresa o confirma la URL del API en la barra lateral para cargar y explorar las órdenes. El dashboard mostrará:
 
 - Filtros por mes, cliente y sede.
-- Matriz de órdenes por rangos de distancia (0-1 km, 1-2 km, …, >10 km) con totales.
+- Matriz mensual de órdenes por rangos de distancia (0-1 km, 1-2 km, …, >10 km) con totales y porcentajes.
 - Detalle de órdenes con distancia calculada (haversine) redondeada a 2 decimales.
 - Mapa pydeck con color diferenciado para sedes y entregas.
